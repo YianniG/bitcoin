@@ -233,6 +233,7 @@ BASE_SCRIPTS = [
     'feature_includeconf.py',
     'feature_asmap.py',
     'mempool_unbroadcast.py',
+    'mempool_compatibility.py',
     'rpc_deriveaddresses.py',
     'rpc_deriveaddresses.py --usecli',
     'rpc_scantxoutset.py',
@@ -241,8 +242,6 @@ BASE_SCRIPTS = [
     'p2p_permissions.py',
     'feature_blocksdir.py',
     'feature_config_args.py',
-    'rpc_getaddressinfo_labels_purpose_deprecation.py',
-    'rpc_getaddressinfo_label_deprecation.py',
     'rpc_getdescriptorinfo.py',
     'rpc_help.py',
     'feature_help.py',
@@ -397,11 +396,12 @@ def run_tests(*, test_list, src_dir, build_dir, tmpdir, jobs=1, enable_coverage=
     args = args or []
 
     # Warn if bitcoind is already running
-    # pidof might fail or return an empty string if bitcoind is not running
     try:
-        if subprocess.check_output(["pidof", "bitcoind"]) not in [b'']:
+        # pgrep exits with code zero when one or more matching processes found
+        if subprocess.run(["pgrep", "-x", "bitcoind"], stdout=subprocess.DEVNULL).returncode == 0:
             print("%sWARNING!%s There is already a bitcoind process running on this system. Tests may fail unexpectedly due to resource contention!" % (BOLD[1], BOLD[0]))
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
+        # pgrep not supported
         pass
 
     # Warn if there is a cache directory

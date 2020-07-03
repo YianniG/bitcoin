@@ -31,6 +31,7 @@
 #include <net_processing.h>
 #include <netbase.h>
 #include <node/context.h>
+#include <node/ui_interface.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/policy.h>
@@ -48,7 +49,6 @@
 #include <torcontrol.h>
 #include <txdb.h>
 #include <txmempool.h>
-#include <ui_interface.h>
 #include <util/asmap.h>
 #include <util/moneystr.h>
 #include <util/string.h>
@@ -152,6 +152,8 @@ NODISCARD static bool CreatePidFile()
 
 static std::unique_ptr<ECCVerifyHandle> globalVerifyHandle;
 
+static std::thread g_load_block;
+
 static boost::thread_group threadGroup;
 
 void Interrupt(NodeContext& node)
@@ -214,8 +216,9 @@ void Shutdown(NodeContext& node)
     StopTorControl();
 
     // After everything has been shut down, but before things get flushed, stop the
-    // CScheduler/checkqueue threadGroup
+    // CScheduler/checkqueue, threadGroup and load block thread.
     if (node.scheduler) node.scheduler->stop();
+    if (g_load_block.joinable()) g_load_block.join();
     threadGroup.interrupt_all();
     threadGroup.join_all();
 
@@ -680,7 +683,6 @@ static void CleanupBlockRevFiles()
 static void ThreadImport(ChainstateManager& chainman, std::vector<fs::path> vImportFiles)
 {
     const CChainParams& chainparams = Params();
-    util::ThreadRename("loadblk");
     ScheduleBatchPriority();
 
     {
@@ -1315,8 +1317,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node)
     node.scheduler = MakeUnique<CScheduler>();
 
     // Start the lightweight task scheduler thread
-    CScheduler::Function serviceLoop = [&node]{ node.scheduler->serviceQueue(); };
-    threadGroup.create_thread(std::bind(&TraceThread<CScheduler::Function>, "scheduler", serviceLoop));
+    threadGroup.create_thread([&] { TraceThread("scheduler", [&] { node.scheduler->serviceQueue(); }); });
 
     // Gather some entropy once per minute.
     node.scheduler->scheduleEvery([]{
@@ -1842,7 +1843,7 @@ bool AppInitMain(const util::Ref& context, NodeContext& node)
         vImportFiles.push_back(strFile);
     }
 
-    threadGroup.create_thread([=, &chainman] { ThreadImport(chainman, vImportFiles); });
+    g_load_block = std::thread(&TraceThread<std::function<void()>>, "loadblk", [=, &chainman]{ ThreadImport(chainman, vImportFiles); });
 
     // Wait for genesis block to be processed
     {
